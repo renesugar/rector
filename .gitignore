@@ -1,6 +1,14 @@
-/rector.yml
-/temp
-!/temp/.gitkeep
-/example
 /vendor
 composer.lock
+
+# PHPStorm meta files
+.idea/
+
+.phpunit.result.cache
+
+# often customized locally - example on Github is just fine
+rector-recipe.php
+
+# testing
+abz
+/rector-temp-phpstan*.neon

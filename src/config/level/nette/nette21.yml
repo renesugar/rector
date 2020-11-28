@@ -1,5 +1,0 @@
-services:
-    Rector\Rector\Contrib\Nette\Application\InjectPropertyRector: ~
-    Rector\Rector\Dynamic\ClassReplacerRector:
-        $oldToNewClasses:
-            'Nette\Config\Configurator': 'Nette\Configurator'

@@ -1,13 +1,11 @@
-<?php declare(strict_types=1);
+<?php
 
-namespace Rector\Contract\Rector;
+declare(strict_types=1);
 
-use PhpParser\Node;
-use PhpParser\NodeVisitor;
+namespace Rector\Core\Contract\Rector;
 
-interface RectorInterface extends NodeVisitor
+use Symplify\RuleDocGenerator\Contract\DocumentedRuleInterface;
+
+interface RectorInterface extends DocumentedRuleInterface
 {
-    public function isCandidate(Node $node): bool;
-
-    public function refactor(Node $node): ?Node;
 }

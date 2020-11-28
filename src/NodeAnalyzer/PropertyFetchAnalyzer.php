@@ -1,178 +1,46 @@
-<?php declare(strict_types=1);
+<?php
 
-namespace Rector\NodeAnalyzer;
+declare(strict_types=1);
+
+namespace Rector\Core\NodeAnalyzer;
 
 use PhpParser\Node;
 use PhpParser\Node\Expr\PropertyFetch;
-use PhpParser\Node\Identifier;
-use Rector\BetterReflection\Reflector\SmartClassReflector;
-use Rector\Node\Attribute;
-use ReflectionProperty;
+use PhpParser\Node\Expr\StaticPropertyFetch;
+use Rector\NodeNameResolver\NodeNameResolver;
 
 final class PropertyFetchAnalyzer
 {
     /**
-     * @var string[][]
+     * @var NodeNameResolver
      */
-    private $publicPropertyNamesForType = [];
+    private $nodeNameResolver;
 
-    /**
-     * @var SmartClassReflector
-     */
-    private $smartClassReflector;
-
-    public function __construct(SmartClassReflector $smartClassReflector)
+    public function __construct(NodeNameResolver $nodeNameResolver)
     {
-        $this->smartClassReflector = $smartClassReflector;
+        $this->nodeNameResolver = $nodeNameResolver;
     }
 
-    public function isTypeAndProperty(Node $node, string $type, string $property): bool
+    public function isLocalPropertyFetch(Node $node): bool
     {
-        if (! $this->isType($node, $type)) {
-            return false;
+        if ($node instanceof PropertyFetch) {
+            return $this->nodeNameResolver->isName($node->var, 'this');
         }
 
-        /** @var PropertyFetch $node */
-        $nodePropertyName = $node->name->toString();
+        if ($node instanceof StaticPropertyFetch) {
+            return $this->nodeNameResolver->isName($node->class, 'self');
+        }
 
-        return $nodePropertyName === $property;
+        return false;
     }
 
-    /**
-     * @param string[] $types
-     */
-    public function isTypesAndProperty(Node $node, array $types, string $property): bool
+    public function isLocalPropertyFetchName(Node $node, string $desiredPropertyName): bool
     {
-        if (! $node instanceof PropertyFetch) {
+        if (! $this->isLocalPropertyFetch($node)) {
             return false;
         }
 
-        $variableNodeTypes = $node->var->getAttribute(Attribute::TYPES);
-        if ($variableNodeTypes === null) {
-            return false;
-        }
-
-        if (! array_intersect($types, $variableNodeTypes)) {
-            return false;
-        }
-
-        /** @var Identifier $identifierNode */
-        $identifierNode = $node->name;
-
-        $nodePropertyName = $identifierNode->toString();
-
-        return $nodePropertyName === $property;
-    }
-
-    public function isMagicOnType(Node $node, string $type): bool
-    {
-        if (! $node instanceof PropertyFetch) {
-            return false;
-        }
-
-        $variableNodeTypes = $node->var->getAttribute(Attribute::TYPES);
-        if (! in_array($type, $variableNodeTypes, true)) {
-            return false;
-        }
-
-        /** @var Identifier $identifierNode */
-        $identifierNode = $node->name;
-
-        $nodePropertyName = $identifierNode->toString();
-
-        $publicPropertyNames = $this->getPublicPropertyNamesForType($type);
-
-        return ! in_array($nodePropertyName, $publicPropertyNames, true);
-    }
-
-    /**
-     * @param string[] $properties
-     */
-    public function isProperties(Node $node, array $properties): bool
-    {
-        if (! $node instanceof PropertyFetch) {
-            return false;
-        }
-
-        /** @var Identifier $identifierNode */
-        $identifierNode = $node->name;
-
-        return in_array($identifierNode->toString(), $properties, true);
-    }
-
-    /**
-     * @param string[] $types
-     */
-    public function isTypes(Node $node, array $types): bool
-    {
-        if (! $node instanceof PropertyFetch) {
-            return false;
-        }
-
-        $variableNodeTypes = $node->var->getAttribute(Attribute::TYPES);
-        if ($variableNodeTypes === null) {
-            return false;
-        }
-
-        return (bool) array_intersect($variableNodeTypes, $types);
-    }
-
-    /**
-     * @param string[] $propertyNames
-     */
-    public function isTypeAndProperties(Node $node, string $type, array $propertyNames): bool
-    {
-        if (! $this->isType($node, $type)) {
-            return false;
-        }
-
-        /** @var PropertyFetch $node */
-        return in_array($node->name->toString(), $propertyNames, true);
-    }
-
-    /**
-     * @param string[] $types
-     * @return string[]
-     */
-    public function matchTypes(Node $node, array $types): array
-    {
-        if (! $this->isTypes($node, $types)) {
-            return [];
-        }
-
-        return $node->var->getAttribute(Attribute::TYPES);
-    }
-
-    /**
-     * @return string[]
-     */
-    private function getPublicPropertyNamesForType(string $type): array
-    {
-        if (isset($this->publicPropertyNamesForType[$type])) {
-            return $this->publicPropertyNamesForType[$type];
-        }
-
-        $classReflection = $this->smartClassReflector->reflect($type);
-        if ($classReflection === null) {
-            return [];
-        }
-
-        $publicProperties = $classReflection->getProperties(ReflectionProperty::IS_PUBLIC);
-
-        return $this->publicPropertyNamesForType[$type] = array_keys($publicProperties);
-    }
-
-    private function isType(Node $node, string $type): bool
-    {
-        if (! $node instanceof PropertyFetch) {
-            return false;
-        }
-
-        $variableNodeTypes = $node->var->getAttribute(Attribute::TYPES);
-        if ($variableNodeTypes === null) {
-            return false;
-        }
-
-        return in_array($type, $variableNodeTypes, true);
+        /** @var PropertyFetch|StaticPropertyFetch $node */
+        return $this->nodeNameResolver->isName($node->name, $desiredPropertyName);
     }
 }

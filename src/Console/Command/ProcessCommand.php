@@ -1,69 +1,41 @@
-<?php declare(strict_types=1);
+<?php
 
-namespace Rector\Console\Command;
+declare(strict_types=1);
 
-use Rector\Application\FileProcessor;
-use Rector\Autoloading\AdditionalAutoloader;
-use Rector\Configuration\Option;
-use Rector\Console\ConsoleStyle;
-use Rector\Console\Output\ProcessCommandReporter;
-use Rector\ConsoleDiffer\DifferAndFormatter;
-use Rector\Exception\Command\FileProcessingException;
-use Rector\Exception\NoRectorsLoadedException;
-use Rector\FileSystem\PhpFilesFinder;
-use Rector\Naming\CommandNaming;
-use Rector\NodeTraverser\RectorNodeTraverser;
-use Rector\Reporting\FileDiff;
-use Symfony\Component\Console\Command\Command;
+namespace Rector\Core\Console\Command;
+
+use Nette\Utils\Strings;
+use Rector\Caching\Application\CachedFileInfoFilterAndReporter;
+use Rector\Caching\Detector\ChangedFilesDetector;
+use Rector\ChangesReporting\Application\ErrorAndDiffCollector;
+use Rector\ChangesReporting\Output\ConsoleOutputFormatter;
+use Rector\Core\Application\RectorApplication;
+use Rector\Core\Autoloading\AdditionalAutoloader;
+use Rector\Core\Configuration\Configuration;
+use Rector\Core\Configuration\Option;
+use Rector\Core\Console\Output\OutputFormatterCollector;
+use Rector\Core\EventDispatcher\Event\AfterReportEvent;
+use Rector\Core\FileSystem\FilesFinder;
+use Rector\Core\Guard\RectorGuard;
+use Rector\Core\NonPhpFile\NonPhpFileProcessor;
+use Rector\Core\PhpParser\NodeTraverser\RectorNodeTraverser;
+use Rector\Core\Stubs\StubLoader;
+use Rector\Core\ValueObject\StaticNonPhpFileSuffixes;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Finder\SplFileInfo;
-use Symplify\PackageBuilder\Parameter\ParameterProvider;
-use Throwable;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symplify\PackageBuilder\Console\ShellCode;
+use Symplify\SmartFileSystem\SmartFileInfo;
 
-final class ProcessCommand extends Command
+final class ProcessCommand extends AbstractCommand
 {
     /**
-     * @var FileProcessor
+     * @var FilesFinder
      */
-    private $fileProcessor;
-
-    /**
-     * @var ConsoleStyle
-     */
-    private $consoleStyle;
-
-    /**
-     * @var PhpFilesFinder
-     */
-    private $phpFilesFinder;
-
-    /**
-     * @var ProcessCommandReporter
-     */
-    private $processCommandReporter;
-
-    /**
-     * @var ParameterProvider
-     */
-    private $parameterProvider;
-
-    /**
-     * @var DifferAndFormatter
-     */
-    private $differAndFormatter;
-
-    /**
-     * @var string[]
-     */
-    private $changedFiles = [];
-
-    /**
-     * @var FileDiff[]
-     */
-    private $fileDiffs = [];
+    private $filesFinder;
 
     /**
      * @var AdditionalAutoloader
@@ -71,133 +43,262 @@ final class ProcessCommand extends Command
     private $additionalAutoloader;
 
     /**
+     * @var RectorGuard
+     */
+    private $rectorGuard;
+
+    /**
+     * @var ErrorAndDiffCollector
+     */
+    private $errorAndDiffCollector;
+
+    /**
+     * @var Configuration
+     */
+    private $configuration;
+
+    /**
+     * @var RectorApplication
+     */
+    private $rectorApplication;
+
+    /**
+     * @var OutputFormatterCollector
+     */
+    private $outputFormatterCollector;
+
+    /**
      * @var RectorNodeTraverser
      */
     private $rectorNodeTraverser;
 
-    public function __construct(
-        FileProcessor $fileProcessor,
-        ConsoleStyle $consoleStyle,
-        PhpFilesFinder $phpFilesFinder,
-        ProcessCommandReporter $processCommandReporter,
-        ParameterProvider $parameterProvider,
-        DifferAndFormatter $differAndFormatter,
-        AdditionalAutoloader $additionalAutoloader,
-        RectorNodeTraverser $rectorNodeTraverser
-    ) {
-        parent::__construct();
+    /**
+     * @var StubLoader
+     */
+    private $stubLoader;
 
-        $this->fileProcessor = $fileProcessor;
-        $this->consoleStyle = $consoleStyle;
-        $this->phpFilesFinder = $phpFilesFinder;
-        $this->processCommandReporter = $processCommandReporter;
-        $this->parameterProvider = $parameterProvider;
-        $this->differAndFormatter = $differAndFormatter;
+    /**
+     * @var NonPhpFileProcessor
+     */
+    private $nonPhpFileProcessor;
+
+    /**
+     * @var SymfonyStyle
+     */
+    private $symfonyStyle;
+
+    /**
+     * @var EventDispatcherInterface
+     */
+    private $eventDispatcher;
+
+    /**
+     * @var CachedFileInfoFilterAndReporter
+     */
+    private $cachedFileInfoFilterAndReporter;
+
+    public function __construct(
+        AdditionalAutoloader $additionalAutoloader,
+        ChangedFilesDetector $changedFilesDetector,
+        Configuration $configuration,
+        ErrorAndDiffCollector $errorAndDiffCollector,
+        EventDispatcherInterface $eventDispatcher,
+        FilesFinder $phpFilesFinder,
+        NonPhpFileProcessor $nonPhpFileProcessor,
+        OutputFormatterCollector $outputFormatterCollector,
+        RectorApplication $rectorApplication,
+        RectorGuard $rectorGuard,
+        RectorNodeTraverser $rectorNodeTraverser,
+        StubLoader $stubLoader,
+        SymfonyStyle $symfonyStyle,
+        CachedFileInfoFilterAndReporter $cachedFileInfoFilterAndReporter
+    ) {
+        $this->filesFinder = $phpFilesFinder;
         $this->additionalAutoloader = $additionalAutoloader;
+        $this->rectorGuard = $rectorGuard;
+        $this->errorAndDiffCollector = $errorAndDiffCollector;
+        $this->configuration = $configuration;
+        $this->rectorApplication = $rectorApplication;
+        $this->outputFormatterCollector = $outputFormatterCollector;
         $this->rectorNodeTraverser = $rectorNodeTraverser;
+        $this->stubLoader = $stubLoader;
+        $this->nonPhpFileProcessor = $nonPhpFileProcessor;
+        $this->changedFilesDetector = $changedFilesDetector;
+        $this->symfonyStyle = $symfonyStyle;
+        $this->eventDispatcher = $eventDispatcher;
+        $this->cachedFileInfoFilterAndReporter = $cachedFileInfoFilterAndReporter;
+
+        parent::__construct();
     }
 
     protected function configure(): void
     {
-        $this->setName(CommandNaming::classToName(self::class));
-        $this->setDescription('Reconstruct set of your code.');
+        $this->setAliases(['rectify']);
+
+        $this->setDescription('Upgrade or refactor source code with provided rectors');
         $this->addArgument(
             Option::SOURCE,
-            InputArgument::REQUIRED | InputArgument::IS_ARRAY,
+            InputArgument::OPTIONAL | InputArgument::IS_ARRAY,
             'Files or directories to be upgraded.'
         );
         $this->addOption(
             Option::OPTION_DRY_RUN,
-            null,
+            'n',
             InputOption::VALUE_NONE,
             'See diff of changes, do not save them to files.'
         );
+
         $this->addOption(
             Option::OPTION_AUTOLOAD_FILE,
-            null,
+            'a',
             InputOption::VALUE_REQUIRED,
             'File with extra autoload'
         );
+
+        $this->addOption(
+            Option::MATCH_GIT_DIFF,
+            null,
+            InputOption::VALUE_NONE,
+            'Execute only on file(s) matching the git diff.'
+        );
+
+        $names = $this->outputFormatterCollector->getNames();
+
+        $description = sprintf('Select output format: "%s".', implode('", "', $names));
+        $this->addOption(
+            Option::OPTION_OUTPUT_FORMAT,
+            'o',
+            InputOption::VALUE_OPTIONAL,
+            $description,
+            ConsoleOutputFormatter::NAME
+        );
+
+        $this->addOption(
+            Option::OPTION_NO_PROGRESS_BAR,
+            null,
+            InputOption::VALUE_NONE,
+            'Hide progress bar. Useful e.g. for nicer CI output.'
+        );
+
+        $this->addOption(
+            Option::OPTION_OUTPUT_FILE,
+            null,
+            InputOption::VALUE_REQUIRED,
+            'Location for file to dump result in. Useful for Docker or automated processes'
+        );
+
+        $this->addOption(Option::CACHE_DEBUG, null, InputOption::VALUE_NONE, 'Debug changed file cache');
+        $this->addOption(Option::OPTION_CLEAR_CACHE, null, InputOption::VALUE_NONE, 'Clear unchaged files cache');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $this->additionalAutoloader->autoloadWithInput($input);
+        $this->configuration->resolveFromInput($input);
+        $this->configuration->validateConfigParameters();
+        $this->configuration->setAreAnyPhpRectorsLoaded((bool) $this->rectorNodeTraverser->getPhpRectorCount());
 
-        $this->ensureSomeRectorsAreRegistered();
+        $this->rectorGuard->ensureSomeRectorsAreRegistered();
+        $this->stubLoader->loadStubs();
 
-        $source = $input->getArgument(Option::SOURCE);
-        $this->parameterProvider->changeParameter(Option::SOURCE, $source);
-        $this->parameterProvider->changeParameter(Option::OPTION_DRY_RUN, $input->getOption(Option::OPTION_DRY_RUN));
-        $files = $this->phpFilesFinder->findInDirectoriesAndFiles($source);
+        $paths = $this->configuration->getPaths();
 
-        $this->processCommandReporter->reportLoadedRectors();
+        $phpFileInfos = $this->findPhpFileInfos($paths);
 
-        $this->processFiles($files);
+        $this->additionalAutoloader->autoloadWithInputAndSource($input, $paths);
 
-        $this->processCommandReporter->reportFileDiffs($this->fileDiffs);
-        $this->processCommandReporter->reportChangedFiles($this->changedFiles);
-        $this->consoleStyle->success('Rector is done!');
-
-        return 0;
-    }
-
-    private function ensureSomeRectorsAreRegistered(): void
-    {
-        if ($this->rectorNodeTraverser->getRectorCount() > 0) {
-            return;
+        if ($this->configuration->isCacheDebug()) {
+            $message = sprintf('[cache] %d files after cache filter', count($phpFileInfos));
+            $this->symfonyStyle->note($message);
+            $this->symfonyStyle->listing($phpFileInfos);
         }
 
-        throw new NoRectorsLoadedException(
-            'No rectors were found. Registers them in rector.yml config to "rector:" '
-            . 'section, load them via "--config <file>.yml" or "--level <level>" CLI options.'
+        $this->configuration->setFileInfos($phpFileInfos);
+        $this->rectorApplication->runOnFileInfos($phpFileInfos);
+
+        // must run after PHP rectors, because they might change class names, and these class names must be changed in configs
+        $nonPhpFileInfos = $this->filesFinder->findInDirectoriesAndFiles(
+            $paths,
+            StaticNonPhpFileSuffixes::SUFFIXES
         );
+
+        $this->nonPhpFileProcessor->runOnFileInfos($nonPhpFileInfos);
+
+        $this->reportZeroCacheRectorsCondition();
+
+        // report diffs and errors
+        $outputFormat = (string) $input->getOption(Option::OPTION_OUTPUT_FORMAT);
+
+        $outputFormatter = $this->outputFormatterCollector->getByName($outputFormat);
+        $outputFormatter->report($this->errorAndDiffCollector);
+
+        $this->eventDispatcher->dispatch(new AfterReportEvent());
+
+        // invalidate affected files
+        $this->invalidateAffectedCacheFiles();
+
+        // some errors were found → fail
+        if ($this->errorAndDiffCollector->getErrors() !== []) {
+            return ShellCode::ERROR;
+        }
+
+        // inverse error code for CI dry-run
+        if ($this->configuration->isDryRun() && $this->errorAndDiffCollector->getFileDiffsCount()) {
+            return ShellCode::ERROR;
+        }
+
+        return ShellCode::SUCCESS;
     }
 
     /**
-     * @param SplFileInfo[] $fileInfos
+     * @param string[] $paths
+     * @return SmartFileInfo[]
      */
-    private function processFiles(array $fileInfos): void
+    private function findPhpFileInfos(array $paths): array
     {
-        $totalFiles = count($fileInfos);
-        $this->consoleStyle->title(sprintf('Processing %d file%s', $totalFiles, $totalFiles === 1 ? '' : 's'));
-        $this->consoleStyle->progressStart($totalFiles);
+        $phpFileInfos = $this->filesFinder->findInDirectoriesAndFiles(
+            $paths,
+            $this->configuration->getFileExtensions(),
+            $this->configuration->mustMatchGitDiff()
+        );
 
-        foreach ($fileInfos as $fileInfo) {
-            try {
-                $this->processFile($fileInfo);
-            } catch (Throwable $throwable) {
-                $this->consoleStyle->newLine();
-                throw new FileProcessingException(
-                    sprintf('Processing of "%s" file failed.', $fileInfo->getPathname()),
-                    $throwable->getCode(),
-                    $throwable
-                );
-            }
+        // filter out non-PHP php files, e.g. blade templates in Laravel
+        $phpFileInfos = array_filter($phpFileInfos, function (SmartFileInfo $smartFileInfo): bool {
+            return ! Strings::endsWith($smartFileInfo->getPathname(), '.blade.php');
+        });
 
-            $this->consoleStyle->progressAdvance();
-        }
-
-        $this->consoleStyle->newLine(2);
+        return $this->cachedFileInfoFilterAndReporter->filterFileInfos($phpFileInfos);
     }
 
-    private function processFile(SplFileInfo $fileInfo): void
+    private function reportZeroCacheRectorsCondition(): void
     {
-        $oldContent = $fileInfo->getContents();
+        if (! $this->configuration->isCacheEnabled()) {
+            return;
+        }
 
-        if ($this->parameterProvider->provideParameter(Option::OPTION_DRY_RUN)) {
-            $newContent = $this->fileProcessor->processFileToString($fileInfo);
-            if ($newContent !== $oldContent) {
-                $this->fileDiffs[] = new FileDiff(
-                    $fileInfo->getPathname(),
-                    $this->differAndFormatter->diffAndFormat($oldContent, $newContent)
-                );
-            }
-        } else {
-            $newContent = $this->fileProcessor->processFile($fileInfo);
-            if ($newContent !== $oldContent) {
-                $this->changedFiles[] = $fileInfo->getPathname();
-            }
+        if ($this->configuration->shouldClearCache()) {
+            return;
+        }
+
+        if (! $this->rectorNodeTraverser->hasZeroCacheRectors()) {
+            return;
+        }
+
+        $message = sprintf(
+            'Ruleset contains %d rules that need "--clear-cache" option to analyse full project',
+            $this->rectorNodeTraverser->getZeroCacheRectorCount()
+        );
+
+        $this->symfonyStyle->note($message);
+    }
+
+    private function invalidateAffectedCacheFiles(): void
+    {
+        if (! $this->configuration->isCacheEnabled()) {
+            return;
+        }
+
+        foreach ($this->errorAndDiffCollector->getAffectedFileInfos() as $affectedFileInfo) {
+            $this->changedFilesDetector->invalidateFile($affectedFileInfo);
         }
     }
 }
